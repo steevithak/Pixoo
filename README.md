@@ -24,6 +24,16 @@ of the libraries functions, which include:
  - Setting the brightness of the display from 1-100%
  - Displaying any Unicode v16 Emoji by name or hex code-point
  - Displaying horizontally scrolling text, with adjustable scroll speed
+ - Set the time and date on the Pixoo
+ - Set the current temperature, units (C/F), and weather condition
+ - Display the clock
+   - 6 face choices
+   - Date view
+   - Temperature view
+   - Weather condition animation
+ - Display the audio visualizer. 12 display modes, uses built-in mic
+ - Display color cycle mode
+ - Display factory demo mode
 
 Note that this code is for the old Bluetooth-only Pixoo, not the modern WiFi
 version. I don't have access to a modern WiFi Pixoo so I don't know if it

@@ -3,6 +3,7 @@ use v5.42;
 use feature 'class';
 use feature 'try';
 no warnings 'experimental::class', 'experimental::try';
+use utf8;
 
 use Socket qw(pack_sockaddr_un);
 use Net::DBus;
@@ -15,12 +16,22 @@ class Pixoo {
     field $AF_BLUETOOTH   :param :reader = 31;
     field $BTPROTO_RFCOMM :param :reader = 3;
 
-    # Protocol Commands
-    field $CMD_SET_SYSTEM_BRIGHTNESS = 0x74;
-    field $CMD_SET_BOX_MODE          = 0x45;
-    field $CMD_SET_COLOR             = 0x6F;
-    field $CMD_DRAW_PIC              = 0x44;
-    field $CMD_DRAW_ANIM             = 0x49;
+    # General Commands
+    field $CMD_SET_BRIGHTNESS = 0x74;
+    field $CMD_SET_DATETIME   = 0x18;
+    field $CMD_SET_COLOR      = 0x6F;
+    field $CMD_DRAW_ANIM      = 0x49;
+    field $CMD_DRAW_PIC       = 0x44;
+    field $CMD_SET_HOT        = 0x26;
+    field $CMD_SET_WEATHER    = 0x5F;
+    field $CMD_SET_TEMP_UNIT  = 0x2B;
+
+    # View Commands
+    field $CMD_SET_VIEW       = 0x45;
+    field $VIEW_CLOCK         = 0x00;
+    field $VIEW_COLOR_CYCLE   = 0x01;
+    field $VIEW_DEMO_LOOP     = 0x02;
+    field $VIEW_AUDIO         = 0x04;
 
     # Instance Fields
     field $mac_address :param :reader;
@@ -113,10 +124,251 @@ class Pixoo {
 
     ### Pixoo commands
 
+    # Set the Pixoo Date and Time.
+    # Pass specific date and time or leave args empty for current time
+    method set_datetime(%args) {
+        my ($year, $month, $day, $hour, $min, $sec);
+
+        if ($args{date} && $args{time}) {
+            # Parse provided strings ("YYYY-MM-DD" and "HH:MM:SS")
+            if ($args{date} =~ /^(\d{4})-(\d{2})-(\d{2})$/ && $args{time} =~ /^(\d{2}):(\d{2}):(\d{2})$/) {
+                ($year, $month, $day) = ($1, $2, $3);
+                ($hour, $min, $sec)   = ($4, $5, $6);
+            }
+            else {
+                die "Invalid date/time format. Expected 'YYYY-MM-DD' and 'HH:MM:SS'\n";
+            }
+        }
+        else {
+            # Default to current system date and time
+            my @now = localtime();
+            $sec   = $now[0];
+            $min   = $now[1];
+            $hour  = $now[2];
+            $day   = $now[3];
+            $month = $now[4] + 1;       # localtime months are 0-11
+            $year  = $now[5] + 1900;    # localtime years are years since 1900
+        }
+
+        # Year split: Year % 100 (e.g. 26) followed by Year / 100 (e.g. 20)
+        my $year_lo = $year % 100;
+        my $year_hi = int($year / 100);
+
+        # Build the payload
+        my @payload = (
+            $year_lo,
+            $year_hi,
+            $month,
+            $day,
+            $hour,
+            $min,
+            $sec
+        );
+
+        $self->_log(sprintf("Setting device datetime to %04d-%02d-%02d %02d:%02d:%02d",
+            $year, $month, $day, $hour, $min, $sec)) if $debug;
+
+        # [0x18, year_lo, year_hi, month, day, hour, min, sec]
+        $self->_send($CMD_SET_DATETIME, \@payload);
+    }
+
+    # Display the Pixoo clock and optionally the weather image, temp, and date.
+    # The timing on my Pixoo is not adjustable and seems to be 28 seconds per
+    # loop with all screens turned on:
+    #   Clock         : 10 seconds
+    #   Weather image :  6 seconds
+    #   Temperature   :  6 seconds
+    #   Date          :  6 seconds
+    #
+    # Arguments:
+    #
+    # * color: RGB color to be used in the clock face, eg. ff43b7
+    #
+    # * clock:  Clock face, integer 0-5
+    #  0 = Default face. Large HH digits on top. Large :MM digits below.
+    #      Color used for digits
+    #  1 = Small HH:MM digits in specified color with animated rainbow
+    #      bars above and below
+    #  2 = Small HH digits above, :MM digits below surrounded by a cyan
+    #      colored box. Color used to digits.
+    #  3 = Analog clock with red minute hand, blue hour hand. Color is
+    #      used as an outline.
+    #  4 = Inverted version of face 0 with black digits. Color is used
+    #      for the background color.
+    #  5 = Analog clock with gray outline, black hour markers, blue minute
+    #      hand, red hour hand. Color is used for face background.
+    #
+    # NOTE: Most of the protocol examples I could find suggested 0-15
+    # were allowed for a total of 16 faces. Maybe that's true on newer
+    # Pixoos but mine only has 6. You can pass up to 15 just in case.
+    #
+    # * twentyfour: boolean, 0 = 12 hour format, 1 = 24 hour format
+    #   This doesn't work on early Pixoo models, they are always 12h
+    #
+    # * weather: show the weather condition animation corresponding to
+    #   the weather condition set in send_weather(). Boolean.
+    #   0 = don't show, 1 = show image
+    #
+    # * temp: show the temperature image. Boolean, 0 = don't show, 1 = show
+    #
+    # * calendar: show the date image. Boolean, 0 = don't show, 1 = sho1
+    #
+    method show_clock(%args) {
+        my $clock      = $args{clock}      // 0;      # Clock face style ID (0-6)
+        my $twentyfour = $args{twentyfour} // 0;      # 24h format / 12h format (0/1)
+        my $weather    = $args{weather}    // 0;      # Weather display toggle (0/1)
+        my $temp       = $args{temp}       // 0;      # Temperature display toggle (0/1)
+        my $calendar   = $args{calendar}   // 0;      # Calendar display toggle (0/1)
+
+        # Base payload for CMD_SET_VIEW (0x45)
+        my @payload = (
+            $VIEW_CLOCK,                             # Clock View (0x00)
+            $twentyfour ? 0x01 : 0x00,               # Set 24/12 format if available
+        );
+
+        # Validate clock style ID (0..15)
+        if (defined $clock && $clock >= 0 && $clock <= 15) {
+            push @payload, $clock, 0x01;      # [clock_style, clock_on]
+        }
+        else {
+            push @payload, 0x00, 0x00;        # [clock_style=0, clock_off]
+        }
+
+        # Add feature toggles
+        push @payload, (
+            $weather  ? 0x01 : 0x00,
+            $temp     ? 0x01 : 0x00,
+            $calendar ? 0x01 : 0x00,
+        );
+
+        # Append RGB color if provided
+        if (defined $args{color}) {
+            my ($r, $g, $b) = $self->_parse_hex_color($args{color});
+            push @payload, ($r, $g, $b);
+        }
+
+        $self->_log(sprintf("Setting clock view (face: %d, 24h: %d, weather: %d, temp: %d, calendar: $calendar)",
+                    $clock, $twentyfour, $weather, $temp, $calendar)) if $debug;
+
+        # Send clock view command and payload
+        my $res = $self->_send($CMD_SET_VIEW, \@payload);
+
+        # Not really sure what this is, doesn't appear to do anything on my
+        # Pixoo but some protocol examples included it. I'm hardcoding it to
+        # the off state for safety.
+        my @hot_payload = (0x00);
+        $self->_send($CMD_SET_HOT, \@hot_payload);
+    }
+
+    # Update the Pixoo weather data.
+    #
+    # Arguments:
+    #
+    # * temp: The current temperature in degrees Celsius.
+    #   Postive temps should be specified as an integer (e.g. 24, 72)
+    #   Negative temps should include a dash (e.g. -16, -2)
+    # * unit: Temperature unit (C/F), applies to temp and display mode
+    # * weather: Weather condition, Integer 0-9
+    #
+    #  #   Image show                       Weather Condition
+    #  0 = No image, may freeze display     -
+    #  1 = Trees with blue sky              Sunny (forest)
+    #  2 = Unused, my pixoo dupes #1        -
+    #  3 = Buildings blue sky heavy clouds  Cloudy (urban)
+    #  4 = Unused, may show #3 w/winds      Clouds/wind (urban)
+    #  5 = Clouds, rain, lightening         Thunderstorm
+    #  6 = Clouds, light rain               Rain
+    #  7 = Unused, my pixoo dupes #5        -
+    #  8 = Snow                             Snow
+    #  9 = Trees with dark clouds           Fog/Haze (forest)
+    #
+    # Your results may vary on the weather images. Different firmware
+    # version had slight variations in the animations.
+    #
+    method send_weather(%args) {
+        $args{temp} //= 0;
+        $args{unit} //= 'C';
+        my $weather  = $args{weather} // 1;
+
+        # Set C/F unit : 0x00 = C, 0x01 = F
+        my $unit_byte = ($args{unit} =~ /^f/i) ? 0x01 : 0x00;
+
+        # Clean up temp input to ensure syntax is usable (e.g. 72, -23, etc)
+        my $temp_raw = 0;
+        $temp_raw = int($1) if ($args{temp} =~ /(-?\d+)/);
+
+        # Always send temp as Celsius regardless of units
+        # Pixoo will re-convert to F on display if needed
+        my $temp_c = $temp_raw;
+        if ($unit_byte == 0x01) {
+            my $temp_float = ($temp_raw - 32) * 5 / 9;
+            $temp_c = int($temp_float + ($temp_float >= 0 ? 0.5 : -0.5));
+        }
+
+        # Convert to signed 8-bit integer byte (supports negative temps down to -128)
+        my $temp_byte = pack("c", $temp_c);
+
+        # Build and send weather payload: [temperature_byte, weather_type]
+        my @weather_payload = (
+            unpack("C", $temp_byte),
+            int($weather)
+        );
+
+        $self->_log(sprintf("Sending weather update: temp=%d, unit=%s, type=%d",
+                    $temp_raw, $args{unit}, $weather)) if $debug;
+
+        $self->_send($CMD_SET_WEATHER, \@weather_payload);
+        $self->_send($CMD_SET_TEMP_UNIT, [$unit_byte]);
+    }
+
+
+    # Set color cycle view
+    # Arguments:
+    #  * color and RGB color (e.g. 00ff00)
+    #  * mode - integer 0-2
+    #    1 = solid display of color
+    #    2 = spectrum cycle (ignores color setting)
+    #    3 = vertical blue/red stripes (ignore color)
+    method set_color_cycle_view(%args) {
+        my ($r, $g, $b) = $self->_parse_hex_color($args{color1} // "FFFFFF");
+        my $brightness  = $args{brightness} // 100;
+        my $mode = $args{mode} // 0;
+        my @payload = ($VIEW_COLOR_CYCLE, $r, $g, $b, $brightness, $mode, 0x01);
+        $self->_log("Switching to color cycle view") if $debug;
+        $self->_send($CMD_SET_VIEW, \@payload);
+    }
+
+    # Run the demo mode - the same sequence that runs when you power up
+    method set_demo_loop_view() {
+        my @payload = ($VIEW_DEMO_LOOP);
+        $self->_log("Switching to demo animation loop view") if $debug;
+        return $self->_send(0x45, \@payload);
+    }
+
+    # Show and audio visualizer display using the built-in microphone
+    # Available Modes:
+    #  0 = Histogram - equalizer style
+    #  1 = moving mouth
+    #  2 = Rainbow double-historgram - waveform style
+    #  3 = muppet with moving mouth
+    #  4 = Green falling dots, dots expand vertically with volume
+    #  5 = Weird green cartoon face, moving eyes/mouth
+    #  6 = vertical left/right rainbow bar historgrams
+    #  7 = Purple talking face, moving eyes/mouth
+    #  8 = Falling colored dots, dot size grows with volume
+    #  9 = Dancing Bart Simpson, more movement with volume
+    # 10 = Old style light organ simulator
+    # 11 = Dancing girl in forest, more movement with volume
+    method set_audio_view($mode = 0) {
+        my @payload = ($VIEW_AUDIO, $mode);
+        $self->_log("Switching to audio visualizer view") if $debug;
+        return $self->_send(0x45, \@payload);
+    }
+
     # Set brightness
     # brightness is the percentage of full brightness: 0 - 100 %
     method set_brightness($brightness) {
-        $self->_send($CMD_SET_SYSTEM_BRIGHTNESS, [$brightness & 0xFF]);
+        $self->_send($CMD_SET_BRIGHTNESS, [$brightness & 0xFF]);
     }
 
     # Set all LEDs on display to a color

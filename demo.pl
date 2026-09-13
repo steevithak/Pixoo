@@ -3,6 +3,7 @@ use v5.42;
 use feature 'try';
 use feature 'class';
 no warnings 'experimental::class', 'experimental::try';
+use utf8;
 
 use FindBin;
 use lib $FindBin::Bin; # Loads Pixoo.pm from the script's directory
@@ -28,6 +29,94 @@ my $pixoo = Pixoo->new(
 try {
     $pixoo->connect();
     say "Connected successfully!";
+
+    # clear screen to black
+    $pixoo->set_color(0,0,0);
+    sleep(1);
+
+    # Set date and time to system time
+    $pixoo->set_datetime();
+    sleep(1);
+
+    # Send weather data (68F + Rain)
+    $pixoo->send_weather(
+        temp    => 68,
+        unit    => 'f',
+        weather => 6
+    );
+    sleep(1);
+
+    # Show clock face 0 with weather, temp, and date
+    $pixoo->show_clock(
+        clock      => 0,        # style
+        twentyfour => 1,        # 1 = 24h / 0 = 12h
+        color      => "ff43b7", # RGB background color
+        weather    => 1,        # 0 no weather image / show weather image
+        temp       => 1,        # 0 no temp / 1 show temp
+        calendar   => 1,        # 0 no date / show date on
+    );
+    sleep(28);
+
+    # Show the clock face 1
+    $pixoo->show_clock(
+        clock      => 1,        # style
+        twentyfour => 0,        # 1 = 24h / 0 = 12h
+        color      => "00FF00", # RGB background color
+        weather    => 0,        # 0 weather off / weather on (not sure if pixoo supports this)
+        temp       => 0,        # 0 no temp / 1 show temp
+        calendar   => 0,        # 0 date off / date on
+    );
+    sleep(2);
+
+    # Show the clock face 2
+    $pixoo->show_clock(
+        clock      => 2,        # style
+        twentyfour => 0,        # 1 = 24h / 0 = 12h
+        color      => "0000ff", # RGB background color
+        weather    => 0,        # 0 weather off / wether on (not sure if pixoo supports this)
+        temp       => 0         # 0 no temp / 1 show temp
+    );
+    sleep(2);
+
+    # Show the clock face 3
+    $pixoo->show_clock(
+        clock      => 3,        # style
+        twentyfour => 0,        # 1 = 24h / 0 = 12h
+        color      => "00ff00", # RGB background color
+        weather    => 0,        # 0 weather off / wether on (not sure if pixoo supports this)
+        temp       => 0         # 0 no temp / 1 show temp
+    );
+    sleep(2);
+
+    # Show the clock face 4
+    $pixoo->show_clock(
+        clock      => 4,        # style
+        twentyfour => 0,        # 1 = 24h / 0 = 12h
+        color      => "FF0000", # RGB background color
+        weather    => 0,        # 0 weather off / wether on (not sure if pixoo supports this)
+        temp       => 0         # 0 no temp / 1 show temp
+    );
+    sleep(2);
+
+    # Show the clock face 5
+    $pixoo->show_clock(
+        clock      => 5,        # style
+        twentyfour => 0,        # 1 = 24h / 0 = 12h
+        color      => "0000ff", # RGB background color
+        weather    => 0,        # 0 weather off / wether on (not sure if pixoo supports this)
+        temp       => 0         # 0 no temp / 1 show temp
+    );
+    sleep(2);
+
+    # 0 solid color
+    # 1 cycle through spectrum (ignores color)
+    # 2 stationary red/blue vert stripes?
+    $pixoo->set_color_cycle_view(
+        color      => "0000ff",
+        brightness => 100,
+        mode       => 1,
+    );
+    sleep(10);
 
     # Set brightness
     say "Setting brightness to 100%...";
@@ -81,7 +170,6 @@ try {
     $pixoo->draw_emoji(emoji => '1f34b-200d-1f7e9', bg_color => '0000ff' );
     sleep(2);
 
-
     # Set brightness 
     say "Setting brightness to 100%...";
     $pixoo->set_brightness(75);
@@ -108,8 +196,15 @@ try {
         color     => '0000ff',
         bg_color  => '101010',
     );
-    sleep(2);
+    sleep(20);
 
+    # Turn on audio visualizer
+    $pixoo->set_audio_view(2);
+    sleep(60);
+
+    # Run the demo
+    $pixoo->set_demo_loop_view();
+    sleep(1);
 }
 catch ($e) {
     warn "Failed to communicate with Pixoo: $e\n";
